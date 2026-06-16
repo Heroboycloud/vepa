@@ -1,7 +1,4 @@
 {
   "name": "php-vercel-app",
-  "version": "1.0.0",
-  "dependencies": {
-    "@vercel/php": "^1.0.0"
-  }
+  "version": "1.0.3"
 }
