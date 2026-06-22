@@ -1,11 +1,17 @@
 <?php
-// Add proper response headers
-header('Content-Type: application/json');
-http_response_code(200);
+$path = $_SERVER['REQUEST_URI'];
+if($path === '/app') {
+require 'app.php';
+}
+elseif ($path === '/home') {
 
-echo json_encode([
-    'status' => 'success',
-    'message' => 'PHP app is running!',
-    'path' => $_SERVER['REQUEST_URI']
-]);
+require 'home.php';
+}
+elseif ($path === '/csv-json') {
+ require 'csv-json.php';
+}
+else {
+ require '404.php';
+}
+
 ?>
