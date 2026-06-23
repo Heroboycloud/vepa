@@ -8,7 +8,7 @@ elseif ($path === '/home') {
 require 'home.php';
 }
 elseif ($path === '/csv-json') {
- require 'csv-json.php';
+ require 'excel-json.php';
 }
 elseif($path === '/dbview'){
  require 'db-viewer.php';
