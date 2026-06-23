@@ -1,9 +1,29 @@
 <?php
-// api/dashboard.php
-require_once 'db-pool.php';
+// api/dashboard.php - Error Resistant Version
 
-// Get system info
-$db = getDB();
+// Turn off error display (we'll handle gracefully)
+error_reporting(E_ALL);
+ini_set('display_errors', 0);
+
+// Try to connect to database, but don't crash if it fails
+$db = null;
+$dbConnected = false;
+
+try {
+    // Only include db-pool if it exists
+    if (file_exists(__DIR__ . '/db-pool.php')) {
+        require_once __DIR__ . '/db-pool.php';
+        $db = getDB();
+        $dbConnected = true;
+    }
+} catch (Exception $e) {
+    // Database connection failed - we'll show "No Database" in UI
+    error_log("Database connection failed: " . $e->getMessage());
+    $dbConnected = false;
+    $db = null;
+}
+
+// Get system info (works without DB)
 $serverInfo = getServerInfo($db);
 $appStats = getAppStats($db);
 $systemHealth = getSystemHealth();
@@ -69,6 +89,15 @@ $systemHealth = getSystemHealth();
         .header-time {
             font-size: 14px;
             opacity: 0.9;
+        }
+
+        .db-status {
+            background: rgba(255,255,255,0.15);
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            display: inline-block;
+            margin-top: 4px;
         }
 
         /* Stats Grid */
@@ -232,11 +261,6 @@ $systemHealth = getSystemHealth();
             color: #9b2c2c;
         }
 
-        .status-maintenance {
-            background: #feebc8;
-            color: #7b341e;
-        }
-
         /* System Info */
         .sys-info {
             display: grid;
@@ -327,6 +351,19 @@ $systemHealth = getSystemHealth();
             font-size: 12px;
         }
 
+        .no-data {
+            padding: 30px;
+            text-align: center;
+            color: #a0aec0;
+            background: #f7fafc;
+            border-radius: 10px;
+        }
+
+        .no-data .big-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+
         /* Footer */
         .footer {
             text-align: center;
@@ -376,6 +413,18 @@ $systemHealth = getSystemHealth();
         .stat-card:nth-child(2) { animation-delay: 0.1s; }
         .stat-card:nth-child(3) { animation-delay: 0.15s; }
         .stat-card:nth-child(4) { animation-delay: 0.2s; }
+
+        .env-tag {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .env-production { background: #fc8181; color: #742a2a; }
+        .env-preview { background: #f6ad55; color: #7b341e; }
+        .env-development { background: #68d391; color: #22543d; }
     </style>
 </head>
 <body>
@@ -389,8 +438,19 @@ $systemHealth = getSystemHealth();
                 <span class="badge">PHP <?php echo phpversion(); ?></span>
             </h1>
             <div style="margin-top: 6px; opacity: 0.8; font-size: 14px;">
-                <?php echo getenv('VERCEL_ENV') ?? 'Development'; ?> · 
-                <?php echo $_SERVER['HTTP_HOST']; ?>
+                <?php 
+                $env = getenv('VERCEL_ENV') ?? 'development';
+                $envClass = 'env-' . strtolower($env);
+                ?>
+                <span class="env-tag <?php echo $envClass; ?>"><?php echo $env; ?></span>
+                · <?php echo $_SERVER['HTTP_HOST']; ?>
+                <div class="db-status">
+                    <?php if($dbConnected): ?>
+                        ✅ Database Connected
+                    <?php else: ?>
+                        ⚠️ No Database (Running in demo mode)
+                    <?php endif; ?>
+                </div>
             </div>
         </div>
         <div class="header-time">
@@ -438,20 +498,28 @@ $systemHealth = getSystemHealth();
                     <span class="count"><?php echo $appStats['total_apps']; ?></span>
                 </div>
                 <div class="app-list">
-                    <?php foreach($appStats['apps'] as $app): ?>
-                    <div class="app-item">
-                        <div class="app-info">
-                            <div class="app-icon"><?php echo $app['icon']; ?></div>
-                            <div>
-                                <div class="app-name"><?php echo $app['name']; ?></div>
-                                <div class="app-path"><?php echo $app['path']; ?></div>
+                    <?php if(count($appStats['apps']) > 0): ?>
+                        <?php foreach($appStats['apps'] as $app): ?>
+                        <div class="app-item">
+                            <div class="app-info">
+                                <div class="app-icon"><?php echo $app['icon']; ?></div>
+                                <div>
+                                    <div class="app-name"><?php echo $app['name']; ?></div>
+                                    <div class="app-path"><?php echo $app['path']; ?></div>
+                                </div>
                             </div>
+                            <span class="app-status <?php echo $app['status_class']; ?>">
+                                <?php echo $app['status']; ?>
+                            </span>
                         </div>
-                        <span class="app-status <?php echo $app['status_class']; ?>">
-                            <?php echo $app['status']; ?>
-                        </span>
-                    </div>
-                    <?php endforeach; ?>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <div class="no-data">
+                            <div class="big-icon">📂</div>
+                            <p>No PHP files found in /api or /public</p>
+                            <p style="font-size: 12px; margin-top: 8px;">Add some .php files to get started!</p>
+                        </div>
+                    <?php endif; ?>
                 </div>
             </div>
 
@@ -490,11 +558,11 @@ $systemHealth = getSystemHealth();
                     </div>
                     <div class="sys-item">
                         <div class="sys-label">Database</div>
-                        <div class="sys-value"><?php echo $serverInfo['db_name']; ?></div>
+                        <div class="sys-value"><?php echo $dbConnected ? $serverInfo['db_name'] : 'Not Connected'; ?></div>
                     </div>
                     <div class="sys-item">
                         <div class="sys-label">MySQL Version</div>
-                        <div class="sys-value"><?php echo $serverInfo['mysql_version']; ?></div>
+                        <div class="sys-value"><?php echo $dbConnected ? $serverInfo['mysql_version'] : 'N/A'; ?></div>
                     </div>
                     <div class="sys-item">
                         <div class="sys-label">Memory Limit</div>
@@ -513,14 +581,26 @@ $systemHealth = getSystemHealth();
                     🗄️ Database Tables
                     <span class="count"><?php echo $appStats['total_tables']; ?></span>
                 </div>
-                <div class="tables-grid">
-                    <?php foreach($appStats['tables'] as $table): ?>
-                    <div class="table-item">
-                        <span class="table-name"><?php echo $table['name']; ?></span>
-                        <span class="table-rows"><?php echo number_format($table['rows']); ?> rows</span>
+                <?php if($dbConnected && count($appStats['tables']) > 0): ?>
+                    <div class="tables-grid">
+                        <?php foreach($appStats['tables'] as $table): ?>
+                        <div class="table-item">
+                            <span class="table-name"><?php echo $table['name']; ?></span>
+                            <span class="table-rows"><?php echo number_format($table['rows']); ?> rows</span>
+                        </div>
+                        <?php endforeach; ?>
                     </div>
-                    <?php endforeach; ?>
-                </div>
+                <?php else: ?>
+                    <div class="no-data">
+                        <div class="big-icon">🗄️</div>
+                        <p><?php echo $dbConnected ? 'No tables found in database' : 'Database not connected'; ?></p>
+                        <p style="font-size: 12px; margin-top: 8px;">
+                            <?php if(!$dbConnected): ?>
+                                Set DB_HOST, DB_USER, DB_PASSWORD, DB_NAME in environment variables
+                            <?php endif; ?>
+                        </p>
+                    </div>
+                <?php endif; ?>
             </div>
 
             <!-- System Health -->
@@ -545,6 +625,9 @@ $systemHealth = getSystemHealth();
     <div class="footer">
         ⚡ Vercel PHP Dashboard · <?php echo date('Y'); ?> · 
         <span style="color: #48bb78;">●</span> All systems operational
+        <?php if(!$dbConnected): ?>
+            · <span style="color: #ecc94b;">⚠️</span> Running without database
+        <?php endif; ?>
     </div>
 
 </div>
@@ -553,22 +636,24 @@ $systemHealth = getSystemHealth();
 
 <?php
 // ============================================
-// FUNCTIONS
+// FUNCTIONS (Error Resistant)
 // ============================================
 
 function getServerInfo($db) {
     $info = [
-        'db_name' => getenv('DB_NAME') ?: 'Not connected',
+        'db_name' => getenv('DB_NAME') ?: 'Not set',
         'mysql_version' => 'Unknown'
     ];
     
-    try {
-        $result = $db->query("SELECT VERSION() as version");
-        if($row = $result->fetch_assoc()) {
-            $info['mysql_version'] = $row['version'];
+    if($db) {
+        try {
+            $result = $db->query("SELECT VERSION() as version");
+            if($row = $result->fetch_assoc()) {
+                $info['mysql_version'] = $row['version'];
+            }
+        } catch(Exception $e) {
+            // Silent fail
         }
-    } catch(Exception $e) {
-        $info['mysql_version'] = 'Not connected';
     }
     
     return $info;
@@ -584,7 +669,7 @@ function getAppStats($db) {
     if(is_dir($apiPath)) {
         $files = scandir($apiPath);
         $apiFiles = array_filter($files, function($f) {
-            return pathinfo($f, PATHINFO_EXTENSION) === 'php' && $f !== 'dashboard.php';
+            return pathinfo($f, PATHINFO_EXTENSION) === 'php' && $f !== 'dashboard.php' && $f !== 'db-pool.php';
         });
         
         foreach($apiFiles as $file) {
@@ -617,20 +702,24 @@ function getAppStats($db) {
         }
     }
     
-    // Get database tables
+    // Get database tables (only if connected)
     $tables = [];
     $totalRows = 0;
-    try {
-        $result = $db->query("SHOW TABLE STATUS");
-        while($row = $result->fetch_assoc()) {
-            $tables[] = [
-                'name' => $row['Name'],
-                'rows' => $row['Rows'] ?? 0
-            ];
-            $totalRows += $row['Rows'] ?? 0;
+    if($db) {
+        try {
+            $result = $db->query("SHOW TABLE STATUS");
+            if($result) {
+                while($row = $result->fetch_assoc()) {
+                    $tables[] = [
+                        'name' => $row['Name'],
+                        'rows' => $row['Rows'] ?? 0
+                    ];
+                    $totalRows += $row['Rows'] ?? 0;
+                }
+            }
+        } catch(Exception $e) {
+            // Silent fail
         }
-    } catch(Exception $e) {
-        // No DB connection
     }
     
     return [
@@ -655,9 +744,13 @@ function getSystemHealth() {
     $memoryPercent = round(100 - $memoryUsage);
     
     // Get disk space (if accessible)
-    $diskFree = disk_free_space('/') ?? 0;
-    $diskTotal = disk_total_space('/') ?? 1;
-    $diskPercent = round(($diskFree / $diskTotal) * 100);
+    try {
+        $diskFree = disk_free_space('/') ?? 0;
+        $diskTotal = disk_total_space('/') ?? 1;
+        $diskPercent = round(($diskFree / $diskTotal) * 100);
+    } catch(Exception $e) {
+        $diskPercent = 85; // Default fallback
+    }
     
     // Simulate other metrics
     $cpuPercent = rand(15, 45);
