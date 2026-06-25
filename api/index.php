@@ -13,6 +13,9 @@ elseif ($path === '/csv-json') {
 elseif($path === '/dbview'){
  require 'db-viewer.php';
 }
+elseif($path === '/location'){
+ require 'locget.php';
+}
 elseif($path === '/dashboard'){
   require 'dashboard.php';
 }
