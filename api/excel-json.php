@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5">
     <title>CSV · Excel to JSON · smart converter</title>
-    <!-- Font & Icons (Inter + simple icons) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
@@ -25,7 +24,6 @@
             padding: 1.5rem 1rem;
         }
 
-        /* ----- main container ----- */
         .app-wrapper {
             max-width: 1200px;
             width: 100%;
@@ -108,9 +106,6 @@
             gap: 0.4rem;
         }
 
-        .header-badge i { font-style: normal; }
-
-        /* responsive header */
         @media (max-width: 640px) {
             .brand-header { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
             .header-badge { align-self: flex-start; margin-top: 0.2rem; }
@@ -131,7 +126,6 @@
             .converter-grid { grid-template-columns: 1fr; gap: 1.5rem; }
         }
 
-        /* panels */
         .panel {
             background: rgba(255,255,255,0.5);
             backdrop-filter: blur(4px);
@@ -203,7 +197,6 @@
             font-weight: 350;
         }
 
-        /* file input */
         .file-upload-row {
             display: flex;
             flex-wrap: wrap;
@@ -244,10 +237,18 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            max-width: 180px;
+            max-width: 200px;
         }
 
-        /* indicators */
+        .supported-formats {
+            font-size: 0.7rem;
+            color: #5982a3;
+            background: rgba(255,255,255,0.3);
+            padding: 0.15rem 0.8rem;
+            border-radius: 30px;
+            border: 1px solid rgba(117,155,190,0.1);
+        }
+
         .status-indicator {
             margin-top: 0.8rem;
             display: flex;
@@ -269,6 +270,7 @@
             border-radius: 10px;
             background: #b7cfdf;
             transition: 0.2s;
+            flex-shrink: 0;
         }
         .status-dot.idle { background: #b7cfdf; }
         .status-dot.processing { background: #f5b342; animation: pulse 1s infinite; }
@@ -362,7 +364,16 @@
             border-left: 4px solid #c73d32;
         }
 
-        /* responsive tweaks */
+        .success-msg {
+            background: #e6f4ef;
+            color: #0e4930;
+            padding: 0.5rem 1.2rem;
+            border-radius: 40px;
+            margin-top: 0.8rem;
+            font-size: 0.8rem;
+            border-left: 4px solid #2a9d8f;
+        }
+
         @media (max-width: 480px) {
             .btn { padding: 0.5rem 1.2rem; font-size: 0.8rem; }
             .brand-text { font-size: 1.4rem; }
@@ -388,18 +399,70 @@
 
     <?php
     // ------------------------------------------------------------
-    // CORE LOGIC : CSV / Excel -> JSON with indicators
+    // CORE LOGIC : CSV / Excel -> JSON with PhpSpreadsheet
     // ------------------------------------------------------------
     $convertedJson = null;
     $rawInput = '';
     $errorMsg = null;
+    $successMsg = null;
     $status = 'idle'; // idle | processing | done | error
     $rowCount = 0;
     $colCount = 0;
     $byteSize = 0;
+    $sourceType = '';
 
-    // helper to parse CSV from string
-    function parseCsvToArray($csvContent) {
+    // Require PhpSpreadsheet
+    require_once 'vendor/autoload.php';
+
+    use PhpOffice\PhpSpreadsheet\IOFactory;
+    use PhpOffice\PhpSpreadsheet\Shared\Date;
+
+    function excelToArray($filePath) {
+        try {
+            $spreadsheet = IOFactory::load($filePath);
+            $worksheet = $spreadsheet->getActiveSheet();
+            $rows = $worksheet->toArray(null, true, true, true);
+            
+            if (count($rows) < 2) return null;
+            // Find this line (around line 429):
+
+	// Replace it with:
+	if (empty($rows) || !isset($rows[0]) || empty($rows[0])) {
+	    return null;
+	}
+	$header = array_values($rows[0]);
+            // First row as headers
+            $header = array_values($rows[0]);
+            $header = array_map(function($col) {
+                $col = trim((string)$col);
+                $col = preg_replace('/[^a-zA-Z0-9_]/', '_', $col);
+                $col = preg_replace('/_+/', '_', $col);
+                return strtolower($col) ?: 'column';
+            }, $header);
+            
+            $data = [];
+            for ($i = 1; $i < count($rows); $i++) {
+                $row = array_values($rows[$i]);
+                $row = array_pad($row, count($header), '');
+                $row = array_slice($row, 0, count($header));
+                $assoc = [];
+                foreach ($header as $idx => $key) {
+                    $val = $row[$idx] ?? '';
+                    // Check if it's a date cell (Excel serialized date)
+                    if (is_numeric($val) && Date::isDateTime($worksheet->getCellByColumnAndRow($idx + 1, $i + 1))) {
+                        $val = Date::excelToDateTimeObject($val)->format('Y-m-d H:i:s');
+                    }
+                    $assoc[$key] = $val;
+                }
+                $data[] = $assoc;
+            }
+            return $data;
+        } catch (Exception $e) {
+            return null;
+        }
+    }
+
+    function csvToArray($csvContent) {
         $lines = preg_split('/\r\n|\r|\n/', $csvContent);
         $lines = array_filter($lines, function($line) { return trim($line) !== ''; });
         if (count($lines) < 2) return null;
@@ -428,61 +491,68 @@
         $status = 'processing';
         $csvInput = trim($_POST['csv_data'] ?? '');
         $fileContent = null;
+        $filePath = null;
+        $dataArray = null;
 
-        // handle file upload (CSV or Excel)
+        // handle file upload
         if (isset($_FILES['csv_file']) && $_FILES['csv_file']['error'] === UPLOAD_ERR_OK) {
             $tmp = $_FILES['csv_file']['tmp_name'];
             $name = $_FILES['csv_file']['name'];
             $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
             $fileData = file_get_contents($tmp);
+            
             if ($fileData !== false) {
-                // if excel, try to read via simple trick: if extension xlsx/xls, we tell user to save as CSV (since no external lib)
-                // but we support .csv and .tsv directly. For .xlsx we show a note, but still try to read as text (fallback)
-                if ($ext === 'xlsx' || $ext === 'xls') {
-                    // we cannot parse binary excel without lib, but we give a friendly message
-                    $errorMsg = 'Excel files (.xlsx/.xls) are not supported directly. Please save as CSV and upload again.';
-                    $status = 'error';
-                } else {
-                    $fileContent = $fileData;
+                // Excel files: use PhpSpreadsheet
+                if (in_array($ext, ['xlsx', 'xls'])) {
+                    $sourceType = 'Excel';
+                    $dataArray = excelToArray($tmp);
+                    if ($dataArray === null) {
+                        $errorMsg = 'Failed to parse Excel file. Make sure it contains a header row and data.';
+                        $status = 'error';
+                    }
+                } 
+                // CSV / TSV / TXT
+                else {
+                    $sourceType = 'CSV';
+                    $csvInput = $fileData;
                 }
             }
         }
 
-        // determine input source: file content > textarea
-        if ($fileContent !== null && empty($errorMsg)) {
-            $csvInput = $fileContent;
+        // If no Excel data, process as CSV from textarea or file
+        if ($dataArray === null && empty($errorMsg)) {
+            if (!empty($csvInput)) {
+                $dataArray = csvToArray($csvInput);
+                if ($dataArray === null) {
+                    $errorMsg = 'CSV must contain a header row and at least one data row.';
+                    $status = 'error';
+                } else {
+                    $rawInput = $csvInput;
+                    $sourceType = 'CSV';
+                }
+            } else {
+                $errorMsg = 'Please paste CSV data or upload a .csv / .xlsx / .xls file.';
+                $status = 'error';
+            }
         }
 
-        if (empty($csvInput) && empty($errorMsg)) {
-            $errorMsg = 'Please paste CSV data or upload a .csv file.';
-            $status = 'error';
-        }
-
-        if (empty($errorMsg) && !empty($csvInput)) {
-            $dataArray = parseCsvToArray($csvInput);
-            if ($dataArray === null) {
-                $errorMsg = 'CSV must contain a header row and at least one data row.';
+        // If we have data, encode to JSON
+        if ($dataArray !== null && empty($errorMsg)) {
+            $json = json_encode($dataArray, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if ($json === false) {
+                $errorMsg = 'Failed to encode JSON. Check your data.';
                 $status = 'error';
             } else {
-                $json = json_encode($dataArray, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-                if ($json === false) {
-                    $errorMsg = 'Failed to encode JSON. Check your CSV content.';
-                    $status = 'error';
-                } else {
-                    $convertedJson = $json;
-                    $rawInput = $csvInput;
-                    $status = 'done';
-                    $rowCount = count($dataArray);
-                    $colCount = ($rowCount > 0 && is_array($dataArray[0])) ? count($dataArray[0]) : 0;
-                    $byteSize = strlen($json);
-                }
+                $convertedJson = $json;
+                $status = 'done';
+                $rowCount = count($dataArray);
+                $colCount = ($rowCount > 0 && is_array($dataArray[0])) ? count($dataArray[0]) : 0;
+                $byteSize = strlen($json);
+                $successMsg = '✓ Successfully converted ' . $rowCount . ' rows from ' . $sourceType;
             }
         }
-        // if errorMsg set from excel fallback
-        if (!empty($errorMsg)) $status = 'error';
     }
 
-    // prefill textarea with previous input (if any)
     $displayCsv = isset($_POST['csv_data']) ? $_POST['csv_data'] : '';
     if (isset($_FILES['csv_file']) && $_FILES['csv_file']['error'] === UPLOAD_ERR_OK && empty($_POST['csv_data']) && isset($rawInput) && !empty($rawInput)) {
         $displayCsv = $rawInput;
@@ -500,10 +570,11 @@
                 <textarea id="csvInput" name="csv_data" rows="8" placeholder="Paste CSV here...&#10;header1,header2,header3&#10;value1,value2,value3"><?php echo htmlspecialchars($displayCsv); ?></textarea>
                 <div class="file-upload-row">
                     <label for="fileUpload" class="file-label">
-                        <span>📎</span> Choose .csv
-                        <input type="file" id="fileUpload" name="csv_file" accept=".csv,.tsv,.txt">
+                        <span>📎</span> Choose file
+                        <input type="file" id="fileUpload" name="csv_file" accept=".csv,.tsv,.txt,.xlsx,.xls">
                     </label>
                     <span class="file-name" id="fileName">no file</span>
+                    <span class="supported-formats">CSV · XLSX · XLS</span>
                 </div>
                 <!-- status indicator -->
                 <div class="status-indicator">
@@ -517,11 +588,14 @@
                         ?>
                     </span>
                     <?php if ($status === 'done'): ?>
-                        <span style="margin-left:auto; background: #e6f0f8; padding:0.1rem 0.8rem; border-radius:30px;">✔ ready</span>
+                        <span style="margin-left:auto; background: #e6f4ef; padding:0.1rem 0.8rem; border-radius:30px; color:#0e4930;">✔ ready</span>
                     <?php endif; ?>
                 </div>
                 <?php if ($errorMsg): ?>
                     <div class="error-msg">⚠️ <?php echo htmlspecialchars($errorMsg); ?></div>
+                <?php endif; ?>
+                <?php if ($successMsg): ?>
+                    <div class="success-msg">✅ <?php echo htmlspecialchars($successMsg); ?></div>
                 <?php endif; ?>
             </div>
 
@@ -543,6 +617,7 @@
                         <span>📊 <?php echo $rowCount; ?> rows</span>
                         <span>📋 <?php echo $colCount; ?> columns</span>
                         <span>📦 <?php echo number_format($byteSize); ?> bytes</span>
+                        <span>📁 <?php echo htmlspecialchars($sourceType); ?></span>
                     <?php else: ?>
                         <span>⏳ waiting for conversion</span>
                     <?php endif; ?>
@@ -568,34 +643,42 @@
     <!-- cool footer -->
     <footer class="footer-note">
         <span>⚡ auto‑detect headers · empty values preserved</span>
-        <span>📁 supports .csv, .tsv</span>
-        <span>🔄 built for devs &amp; data pipelines</span>
+        <span>📁 supports .csv, .tsv, .xlsx, .xls</span>
+        <span>🔄 built with PhpSpreadsheet</span>
     </footer>
 </div>
 
 <script>
     (function() {
-        // file input display + fill textarea
         const fileInput = document.getElementById('fileUpload');
         const fileNameSpan = document.getElementById('fileName');
         if (fileInput) {
             fileInput.addEventListener('change', function(e) {
                 const file = this.files[0];
                 if (file) {
+                    const ext = file.name.split('.').pop().toLowerCase();
+                    const isExcel = ['xlsx', 'xls'].includes(ext);
                     fileNameSpan.textContent = file.name + ' (' + (file.size/1024).toFixed(1) + ' KB)';
-                    const reader = new FileReader();
-                    reader.onload = function(ev) {
+                    
+                    // For CSV files, read and fill textarea; for Excel, just show name (can't preview)
+                    if (!isExcel) {
+                        const reader = new FileReader();
+                        reader.onload = function(ev) {
+                            const textarea = document.getElementById('csvInput');
+                            if (textarea) textarea.value = ev.target.result;
+                        };
+                        reader.readAsText(file);
+                    } else {
+                        // Excel: clear textarea to avoid confusion, but keep file
                         const textarea = document.getElementById('csvInput');
-                        if (textarea) textarea.value = ev.target.result;
-                    };
-                    reader.readAsText(file);
+                        if (textarea) textarea.value = '';
+                    }
                 } else {
                     fileNameSpan.textContent = 'no file';
                 }
             });
         }
 
-        // copy
         const copyBtn = document.getElementById('copyBtn');
         if (copyBtn) {
             copyBtn.addEventListener('click', function() {
@@ -624,7 +707,6 @@
             });
         }
 
-        // download
         const downloadBtn = document.getElementById('downloadBtn');
         if (downloadBtn) {
             downloadBtn.addEventListener('click', function() {
@@ -648,7 +730,6 @@
             });
         }
 
-        // reset
         window.resetForm = function() {
             document.getElementById('csvInput').value = '';
             const output = document.getElementById('jsonOutput');
@@ -658,14 +739,14 @@
             const fileInput = document.getElementById('fileUpload');
             if (fileInput) fileInput.value = '';
             document.getElementById('fileName').textContent = 'no file';
-            // reset status dot
             const dot = document.querySelector('.status-dot');
             if (dot) { dot.className = 'status-dot idle'; }
             const statusText = document.getElementById('statusText');
             if (statusText) statusText.textContent = '⏳ waiting for input';
-            // remove error messages
             const errDiv = document.querySelector('.error-msg');
             if (errDiv) errDiv.remove();
+            const successDiv = document.querySelector('.success-msg');
+            if (successDiv) successDiv.remove();
         };
     })();
 </script>

@@ -16,6 +16,10 @@ elseif($path === '/dbview'){
 elseif($path === '/dashboard'){
   require 'dashboard.php';
 }
+elseif($path === '/random-user'){
+  require 'randomuser.php';
+}
+
 else {
  require '404.php';
 }
